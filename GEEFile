@@ -1,0 +1,124 @@
+var indices = ee.ImageCollection("MODIS/061/MOD13Q1"),
+    admin2 = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level2"),
+    tempdata = ee.ImageCollection("NASA/VIIRS/002/VNP21A1D"),
+    aerosol = ee.ImageCollection("MODIS/061/MCD19A2_GRANULES");
+
+var pune = admin2
+  .filter(ee.Filter.eq('ADM2_NAME', 'Pune'));
+
+var geometry = pune.geometry();
+Map.centerObject(geometry);
+
+print(geometry);
+
+Map.addLayer(geometry); 
+
+var filtered = indices.filter(ee.Filter.date('2019-01-01', '2020-01-01'))
+              .filter(ee.Filter.bounds(geometry));
+var nvdi = filtered.select('NDVI');
+
+var image = ee.Image(nvdi.median());
+
+var scaled_image = image.multiply(0.0001).rename('NDVI')
+
+var visparam = {
+  min: 0, 
+  max: 0.7,
+  palette: ['white', 'green']
+}
+
+Map.addLayer(scaled_image.clip(geometry), visparam, 'NDVI')
+
+var filteredtemp = tempdata.filter(ee.Filter.date('2019-01-01', '2020-01-01'))
+              .filter(ee.Filter.bounds(geometry));
+var temp = filteredtemp.select('LST_1KM');
+
+var image1 = ee.Image(temp.median());
+
+var scaled_image1 = image1.multiply(1000).rename('LST')
+
+var visualization = {
+  min: 303911.2, 
+  max: 319808.8,
+  palette: [
+    'a50026',
+    'd73027',
+    'f46d43',
+    'fdae61',
+    'fee08b',
+    'ffffbf',
+    'd9ef8b',
+    'a6d96a',
+    '66bd63',
+    '1a9850',
+    '006837',
+  ]
+}
+
+Map.addLayer(scaled_image1.clip(geometry), visualization, 'Temp')
+
+
+var pmfiltered = aerosol.filter(ee.Filter.date('2019-01-01', '2020-01-01'))
+              .filter(ee.Filter.bounds(geometry));
+var pm = pmfiltered.select('Optical_Depth_055');
+
+var image2 = ee.Image(pm.median());
+
+var scaled_image2 = image2.multiply(1000).rename('AOD')
+
+var band_viz = {
+  min: 379193.4285714286,
+  max: 537278,
+  palette: ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+};
+
+
+
+Map.addLayer(scaled_image2.clip(geometry), band_viz, 'ParticulateMatter')
+
+
+var stackedImage = scaled_image.addBands(scaled_image1).addBands(scaled_image2);
+
+var numSamplePoints = 5000;
+
+var samplePoints = ee.FeatureCollection.randomPoints({
+  region: geometry,
+  points: numSamplePoints,
+  seed: 42
+});
+
+var landsatScale = 30;        
+
+var sampledData = stackedImage.sampleRegions({
+  collection: samplePoints,
+  properties: ['NDVI', 'LST', 'AOD'],
+  scale: landsatScale, 
+  tileScale: 16
+});
+
+
+var pearson = ee.Reducer.pearsonsCorrelation();
+
+var corr_NDVI_LST = sampledData.reduceColumns({
+  reducer: pearson,
+  selectors: ['NDVI', 'LST']
+});
+
+print('--- Correlation Results ---');
+print('1. NDVI (Tree Cover) vs. LST (Temperature):', corr_NDVI_LST);
+
+var corr_NDVI_AOD = sampledData.reduceColumns({
+  reducer: pearson,
+  selectors: ['NDVI', 'AOD']
+});
+
+print('2. NDVI (Tree Cover) vs. AOD (Pollution):', corr_NDVI_AOD);
+
+
+Export.table.toDrive({
+  collection: sampledData,
+  description: 'EXPORT',
+  folder: '/////', 
+  fileNamePrefix: 'correl_dataset',
+  fileFormat: 'CSV'
+});
