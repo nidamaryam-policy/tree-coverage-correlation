@@ -3,43 +3,50 @@ var indices = ee.ImageCollection("MODIS/061/MOD13Q1"),
     tempdata = ee.ImageCollection("NASA/VIIRS/002/VNP21A1D"),
     aerosol = ee.ImageCollection("MODIS/061/MCD19A2_GRANULES");
 
-var pune = admin2
-  .filter(ee.Filter.eq('ADM2_NAME', 'Pune'));
+var pune = admin2.filter(ee.Filter.eq('ADM2_NAME', 'Pune'))
+.first();
 
 var geometry = pune.geometry();
 Map.centerObject(geometry);
 
-print(geometry);
-
 Map.addLayer(geometry); 
 
-var filtered = indices.filter(ee.Filter.date('2019-01-01', '2020-01-01'))
-              .filter(ee.Filter.bounds(geometry));
-var nvdi = filtered.select('NDVI');
 
-var image = ee.Image(nvdi.median());
+//----------------------------------------------------------NVDI
+var filtered = indices.filterDate('2019-01-01', '2020-01-01')
+  .filterBounds(geometry);
+  
+var nvdi = filtered.median()
+  .select('NDVI')
+  .rename('NDVI')
+  .clip(geometry);
 
-var scaled_image = image.multiply(0.0001).rename('NDVI')
+var scaled_image = nvdi.multiply(0.0001);
 
 var visparam = {
   min: 0, 
   max: 0.7,
   palette: ['white', 'green']
-}
+};
 
-Map.addLayer(scaled_image.clip(geometry), visparam, 'NDVI')
+Map.addLayer(scaled_image, visparam, 'NDVI');
 
-var filteredtemp = tempdata.filter(ee.Filter.date('2019-01-01', '2020-01-01'))
-              .filter(ee.Filter.bounds(geometry));
-var temp = filteredtemp.select('LST_1KM');
 
-var image1 = ee.Image(temp.median());
+//---------------------------------------------------Temperature
 
-var scaled_image1 = image1.multiply(1000).rename('LST')
+var filtered1 = tempdata.filterDate('2019-01-01', '2020-01-01')
+  .filterBounds(geometry);
+  
+var temp = filtered1.median()
+  .select('LST_1KM')
+  .rename('LST')
+  .clip(geometry);
+
+var scaled_image1 = temp.multiply(0.02);
 
 var visualization = {
-  min: 303911.2, 
-  max: 319808.8,
+  min: 6.082536, 
+  max: 6.396264,
   palette: [
     'a50026',
     'd73027',
@@ -53,51 +60,57 @@ var visualization = {
     '1a9850',
     '006837',
   ]
-}
+};
 
-Map.addLayer(scaled_image1.clip(geometry), visualization, 'Temp')
+Map.addLayer(scaled_image1, visualization, 'Temp');
 
 
-var pmfiltered = aerosol.filter(ee.Filter.date('2019-01-01', '2020-01-01'))
-              .filter(ee.Filter.bounds(geometry));
-var pm = pmfiltered.select('Optical_Depth_055');
+//----------------------------------------------------PM
 
-var image2 = ee.Image(pm.median());
+var filtered2 = aerosol.filterDate('2019-01-01', '2020-01-01')
+  .filterBounds(geometry);
+  
+var pm = filtered2.median()
+  .select('Optical_Depth_055')
+  .rename('AOD')
+  .clip(geometry);
 
-var scaled_image2 = image2.multiply(1000).rename('AOD')
+var scaled_image2 = pm.multiply(0.001);
 
 var band_viz = {
-  min: 379193.4285714286,
-  max: 537278,
+  min: 0.37919342857142857,
+  max: 0.537278,
   palette: ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']
 };
 
-
-
-Map.addLayer(scaled_image2.clip(geometry), band_viz, 'ParticulateMatter')
-
+Map.addLayer(scaled_image2, band_viz, 'ParticulateMatter');
 
 var stackedImage = scaled_image.addBands(scaled_image1).addBands(scaled_image2);
 
-var numSamplePoints = 5000;
+//-----------------------------------------------------------------------------SAMPLE
+
+var numSamplePoints = 5000
 
 var samplePoints = ee.FeatureCollection.randomPoints({
   region: geometry,
   points: numSamplePoints,
   seed: 42
-});
+})
+
+print(samplePoints)
 
 var landsatScale = 30;        
 
 var sampledData = stackedImage.sampleRegions({
   collection: samplePoints,
-  properties: ['NDVI', 'LST', 'AOD'],
-  scale: landsatScale, 
-  tileScale: 16
+  scale: 16,
 });
 
+print(sampledData)
 
-var pearson = ee.Reducer.pearsonsCorrelation();
+//------------------------------------------------------------Correlation
+
+var pearson = ee.Reducer.pearsonsCorrelation()
 
 var corr_NDVI_LST = sampledData.reduceColumns({
   reducer: pearson,
@@ -114,11 +127,3 @@ var corr_NDVI_AOD = sampledData.reduceColumns({
 
 print('2. NDVI (Tree Cover) vs. AOD (Pollution):', corr_NDVI_AOD);
 
-
-Export.table.toDrive({
-  collection: sampledData,
-  description: 'EXPORT',
-  folder: '/////', 
-  fileNamePrefix: 'correl_dataset',
-  fileFormat: 'CSV'
-});
